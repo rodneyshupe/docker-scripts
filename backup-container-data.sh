@@ -2,7 +2,8 @@
 
 destination="/mnt/appdata"
 
-# TODO: Turn this into an argument.
+SCRIPT_NAME=$0
+
 FLAG_DRYRUN=0 # Set to 1 to do this as a dryrun.
 FLAG_DEBUG=0 # Set to 1 to do this as a dryrun.
 
@@ -42,13 +43,12 @@ function parse_arguments () {
                     destination="$1"
                     flag_destination_passed=0
                     shift
-                    ;;
                 else
                     echo "ERROR: Only supply on destination folder." >&2
                     echo "$(usage)" >&2
                     exit 1
-                    ;;
                 fi
+                ;;
         esac
     done
 }
@@ -173,22 +173,49 @@ function backup_container() {
 function process_container() {
     local container=$1
 
-    source_paths="$(docker container inspect $container | grep --only-matching -e "$escaped_source[^\\\"^:]*" | uniq)"
+    local sources="$(docker container inspect "$container" | jq '.[].Mounts' | jq -r '.[].Source')"
+    local source_paths=""
+    if [ ! -z "$sources" ]; then
+        local source_path
+        while read source_path; do
+            if ! $(ignore_source "$source_path"); then
+                if $(path_is_valid "$source_path"); then
+                    local destination_path="$(find_match "$source_path")"
+                    if $(path_is_valid "$destination_path") ; then
+                        if [ "$(ls -A "$source_path")" ]; then
+                            if [ -z "$source_path" ]; then
+                                source_paths="$source_path"
+                            else
+                                source_paths="$(echo -e "$source_paths\n$source_path")"
+                            fi
+                        fi
+                    fi
+                fi
+            fi
+        done <<< "$sources"
+    fi
 
-    echo "Syncing App Data for $container:"
-    echo "    Stopping container..."
-    [ $FLAG_DRYRUN -eq 0 ] && docker container stop $container >/dev/null
+    if [ -z "$source_paths" ]; then
+        echo "Nothing to backup so ignoring container ($container)"
+    else
+        echo "Syncing App Data for $container:"
+        echo "    Stopping container..."
+        [ $FLAG_DRYRUN -eq 0 ] && docker container stop $container >/dev/null
 
-    echo "    Backup container..."
-    backup_container "$container"
+        echo "    Backup container..."
+        backup_container "$container"
 
-    echo "    Restarting container..."
-    [ $FLAG_DRYRUN -eq 0 ] && docker container start $container >/dev/null
+        echo "    Restarting container..."
+        [ $FLAG_DRYRUN -eq 0 ] && docker container start $container >/dev/null
+    fi
 }
+
+START_SEC=$(date +%s)
 
 ensure_jq
 
-START_SEC=$(date +%s)
+parse_arguments $@
+
 echo "Start Time: $(date)"
 
 escaped_destination=$(echo "$destination" | sed 's/\//\\\//g')

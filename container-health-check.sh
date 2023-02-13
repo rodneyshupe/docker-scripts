@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+SCRIPT_NAME=$0
+
 FLAG_DEBUG=0
 FLAG_DRYRUN=0
 FLAG_CONATINER_LIST=0
