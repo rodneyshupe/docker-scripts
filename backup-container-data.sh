@@ -1,9 +1,57 @@
 #!/usr/bin/env bash
 
-destination="${1:-/mnt/appdata}"
+destination="/mnt/appdata"
 
 # TODO: Turn this into an argument.
 FLAG_DRYRUN=0 # Set to 1 to do this as a dryrun.
+FLAG_DEBUG=0 # Set to 1 to do this as a dryrun.
+
+function usage {
+  echo "Usage: ${SCRIPT_NAME} [options] [backup path]"
+  if [ $# -eq 0 ] || [ -z "$1" ]; then
+    echo "  -d|--debug        Run with additional debugging info"
+    echo "  -D|--dryrun       Dry run"
+    echo "  -h|--help         Display help"
+  fi
+}
+
+function parse_arguments () {
+    flag_destination_passed=0
+    while (( "$#" )); do
+        case "$1" in
+            -d|--debug)
+                FLAG_DEBUG=1
+                shift
+                ;;
+            -D|--dryrun)
+                FLAG_DRYRUN=1
+                shift
+                ;;
+            -h|--help)
+                echo "$(usage)"
+                shift
+                exit 0
+                ;;
+            -*|--*=) # unsupported flags
+                echo "ERROR: Unsupported flag $1" >&2
+                echo "$(usage)" >&2
+                exit 1
+                ;;
+            *) # preserve positional arguments
+                if [ $flag_destination_passed -eq 0 ]; then
+                    destination="$1"
+                    flag_destination_passed=0
+                    shift
+                    ;;
+                else
+                    echo "ERROR: Only supply on destination folder." >&2
+                    echo "$(usage)" >&2
+                    exit 1
+                    ;;
+                fi
+        esac
+    done
+}
 
 function secs_to_human() {
     #echo "$(( ${1} / 3600 ))h $(( (${1} / 60) % 60 ))m $(( ${1} % 60 ))s"
@@ -94,8 +142,8 @@ function backup_container() {
                                 --checksum \
                                 --perms \
                                 --xattrs \
-                                --human-readable \
-                                --itemize-changes \
+                                $([ $FLAG_DEBUG -eq 1 ] && echo "--human-readable") \
+                                $([ $FLAG_DEBUG -eq 1 ] && echo "--itemize-changes") \
                                 --times \
                                 --modify-window=1 \
                                 --exclude='*.log' \
