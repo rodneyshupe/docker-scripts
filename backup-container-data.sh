@@ -5,21 +5,39 @@ destination="/mnt/appdata"
 SCRIPT_NAME=$0
 
 FLAG_DRYRUN=0 # Set to 1 to do this as a dryrun.
-FLAG_DEBUG=0 # Set to 1 to do this as a dryrun.
+FLAG_DEBUG=0  # Set to 1 to do this as a debug.
+FLAG_LOGS=1   # Set to 0 to exclude logs
+FLAG_CACHE=0  # Set to 1 to include cache files
+FLAG_DELETE=1 # Set to 0 to not retain destination files on source
 
 function usage {
-  echo "Usage: ${SCRIPT_NAME} [options] [backup path]"
-  if [ $# -eq 0 ] || [ -z "$1" ]; then
-    echo "  -d|--debug        Run with additional debugging info"
-    echo "  -D|--dryrun       Dry run"
-    echo "  -h|--help         Display help"
-  fi
+    echo "Usage: ${SCRIPT_NAME} [options] [backup path]"
+    if [ $# -eq 0 ] || [ -z "$1" ]; then
+        echo "  -e|--exclude-logs    Exclude logs from backup"
+        echo "  -c|--include-cache   Include cache files in backup"
+        echo "  -m|--retain-missing  Do not delete files on destination that do not exist on source"
+        echo "  -d|--debug        Run with additional debugging info"
+        echo "  -D|--dryrun       Dry run"
+        echo "  -h|--help         Display help"
+    fi
 }
 
 function parse_arguments () {
     flag_destination_passed=0
     while (( "$#" )); do
         case "$1" in
+            -e|--exclude-logs)
+                FLAG_LOGS=0
+                shift
+                ;;
+            -c|--include-cache)
+                FLAG_CACHE=1
+                shift
+                ;;
+            -m|--do-not-delete|--retain-missing)
+                FLAG_DELETE=0
+                shift
+                ;;
             -d|--debug)
                 FLAG_DEBUG=1
                 shift
@@ -139,6 +157,8 @@ function backup_container() {
                             sudo rsync \
                                 $([ $FLAG_DRYRUN -eq 1 ] && echo "--dry-run") \
                                 --archive \
+                                $([ $FLAG_DELETE -eq 1 ] && echo "--delete") \
+                                --append-verify \
                                 --checksum \
                                 --perms \
                                 --xattrs \
@@ -146,12 +166,12 @@ function backup_container() {
                                 $([ $FLAG_DEBUG -eq 1 ] && echo "--itemize-changes") \
                                 --times \
                                 --modify-window=1 \
-                                --exclude='*.log' \
-                                --exclude='logs.*' \
-                                --exclude='logs/' \
-                                --exclude='*/logs' \
-                                --exclude='*/cache' \
-                                --exclude='cache/' \
+                                $([ $FLAG_LOGS -eq 1 ] && echo "--exclude='*.log'") \
+                                $([ $FLAG_LOGS -eq 1 ] && echo "--exclude='logs.*'") \
+                                $([ $FLAG_LOGS -eq 1 ] && echo "--exclude='logs/'") \
+                                $([ $FLAG_LOGS -eq 1 ] && echo "--exclude='*/logs'") \
+                                $([ $FLAG_CACHE -eq 1 ] && echo "--exclude='*/cache'") \
+                                $([ $FLAG_CACHE -eq 1 ] && echo "--exclude='cache/'") \
                                 "$source_path"/* "$destination_path"/
                         else
                             echo "    Skipping Sync $source_path -> $destination_path as source is empty"
