@@ -59,6 +59,16 @@ function parse_arguments () {
     done
 }
 
+function ensure_jq() {
+    if (jq --version >/dev/null 2>&1); then
+        true
+    else
+        echo
+        echo "$(log_prefix)ERROR: This script requires 'jq'.  Please install apt-get install jq"
+        exit 2;
+    fi
+}
+
 function container_status() {
     local CONTAINER_ID="$1"
     local CONTAINER_STATUS="$(docker container inspect ${CONTAINER_ID} | jq -r '.[0].State.Health.Status')"
@@ -84,6 +94,8 @@ function check_container() {
         echo "${CONTAINER_NAME} (${CONTAINER_ID}): $CONTAINER_STATUS"
     fi
 }
+
+ensure_jq
 
 parse_arguments $@
 
