@@ -10,20 +10,31 @@ FLAG_LOGS=1   # Set to 0 to exclude logs
 FLAG_CACHE=0  # Set to 1 to include cache files
 FLAG_DELETE=1 # Set to 0 to not retain destination files on source
 
+FLAG_CONTAINER_PASSED=0
+
+SOURCE_BASE="/srv/appdata"
+if [ ! -d "$SOURCE_BASE" ]; then
+    SOURCE_BASE="/opt/appdata"
+fi
+
+DESTINATION_BASE="/mnt/appdata"
+CONTAINER=""
+
 function usage {
     echo "Usage: ${SCRIPT_NAME} [options] [backup path]"
     if [ $# -eq 0 ] || [ -z "$1" ]; then
-        echo "  -e|--exclude-logs    Exclude logs from backup"
-        echo "  -c|--include-cache   Include cache files in backup"
-        echo "  -m|--retain-missing  Do not delete files on destination that do not exist on source"
-        echo "  -d|--debug        Run with additional debugging info"
-        echo "  -D|--dryrun       Dry run"
-        echo "  -h|--help         Display help"
+        echo "  -e|--exclude-logs      Exclude logs from backup"
+        echo "  -c|--include-cache     Include cache files in backup"
+        echo "  -m|--retain-missing    Do not delete files on destination that do not exist on source"
+        echo "  -s|--source-base       Source path to all container data (defaults to /srv/appdata)"
+        echo "  -s|--destination-base  Location to match source path fro backup (defaults to /mnt/appdata)"
+        echo "  --debug                Run with additional debugging info"
+        echo "  -D|--dryrun            Dry run"
+        echo "  -h|--help              Display help"
     fi
 }
 
 function parse_arguments () {
-    flag_destination_passed=0
     while (( "$#" )); do
         case "$1" in
             -e|--exclude-logs)
@@ -38,8 +49,28 @@ function parse_arguments () {
                 FLAG_DELETE=0
                 shift
                 ;;
-            -d|--debug)
-                FLAG_DEBUG=1
+            -s|--source-base)
+                shift
+                if [ -d "$1" ]; then
+                    SOURCE_BASE="$1"
+                else
+                    echo "ERROR: Source base does not exist. ($1)"
+                    exit 1
+                fi
+                shift
+                ;;
+            -d|--destination-base)
+                shift
+                if [ -d "$1" ]; then
+                    DESTINATION_BASE="$1"
+                else
+                    echo "ERROR: Destination base does not exist. ($1)"
+                    exit 1
+                fi
+                shift
+                ;;
+            --debug)
+                FLAG_DEBUG=$((FLAG_DEBUG+1))
                 shift
                 ;;
             -D|--dryrun)
@@ -57,12 +88,12 @@ function parse_arguments () {
                 exit 1
                 ;;
             *) # preserve positional arguments
-                if [ $flag_destination_passed -eq 0 ]; then
-                    destination="$1"
-                    flag_destination_passed=0
+                if [ $FLAG_CONTAINER_PASSED -eq 0 ]; then
+                    CONTAINER="$1"
+                    FLAG_CONTAINER_PASSED=1
                     shift
                 else
-                    echo "ERROR: Only supply on destination folder." >&2
+                    echo "ERROR: Only supply on containerr." >&2
                     echo "$(usage)" >&2
                     exit 1
                 fi
@@ -111,8 +142,17 @@ function ignore_source() {
         || [[ "$path" == /lib/* ]] \
         || [[ "$path" == /etc/* ]] \
         || [[ "$path" == /sys/* ]] \
+        || [[ "$path" == /var/* ]] \
         || [[ "$path" == /bin/* ]] \
-        || [[ "$path" == /mnt/* ]]; then
+        || [[ "$path" == /mnt/* ]] \
+        || [[ "$path" == /opt/* ]] \
+        || [[ "$path" == "/proc" ]] \
+        || [[ "$path" == "/etc" ]] \
+        || [[ "$path" == "/sys" ]] \
+        || [[ "$path" == "/var" ]] \
+        || [[ "$path" == "$SOURCE_BASE" ]] \
+        || [[ "$path" == "$DESTINATION_BASE" ]] \
+        || [[ "$path" == "/" ]]; then
         echo "true"
     else
         echo "false"
@@ -128,7 +168,9 @@ function find_match() {
         test="/$(basename "$next")$test"
         next="$(dirname "$next")"
 
-        local backup="$(sudo find $destination -maxdepth 3 -wholename "*$test" -type d)"
+        [ $FLAG_DEBUG -ge 2 ] && echo "DEBUG: next=$next test=$test"
+        local backup="$(sudo find $DESTINATION_BASE -maxdepth 3 -wholename "*$test" -type d)"
+        [ $FLAG_DEBUG -ge 2 ] && echo "DEBUG: backup=$backup"
         if [ $(echo "$backup" | wc -l) -eq 1 ]; then
             source="$next$test"
             break
@@ -150,8 +192,11 @@ function backup_container() {
                 echo "    Skipping mounted source \"$source_path\""
             else
                 if $(path_is_valid "$source_path"); then
-                    local destination_path="$(find_match "$source_path")"
-                    if $(path_is_valid "$destination_path") ; then
+                    local destination_path="$(echo "$source_path" | sed -e "s|$SOURCE_BASE|$DESTINATION_BASE|")"
+                    if ! $(path_is_valid "$destination_path") || [[ "$destination_path" == "$source_path" ]]; then
+                        destination_path="$(find_match "$source_path")"
+                    fi
+                    if $(path_is_valid "$destination_path") && [[ "$destination_path" != "$source_path" ]]; then
                         if [ "$(ls -A "$source_path")" ]; then
                             echo "    Sync $source_path -> $destination_path..."
                             sudo rsync \
@@ -162,8 +207,8 @@ function backup_container() {
                                 --checksum \
                                 --perms \
                                 --xattrs \
-                                $([ $FLAG_DEBUG -eq 1 ] && echo "--human-readable") \
-                                $([ $FLAG_DEBUG -eq 1 ] && echo "--itemize-changes") \
+                                $([ $FLAG_DEBUG -ge 1 ] && echo "--human-readable") \
+                                $([ $FLAG_DEBUG -ge 1 ] && echo "--itemize-changes") \
                                 --times \
                                 --modify-window=1 \
                                 $([ $FLAG_LOGS -eq 1 ] && echo "--exclude='*.log'") \
@@ -200,15 +245,18 @@ function process_container() {
         while read source_path; do
             if ! $(ignore_source "$source_path"); then
                 if $(path_is_valid "$source_path"); then
-                    local destination_path="$(find_match "$source_path")"
-                    if $(path_is_valid "$destination_path") ; then
+                    local destination_path="$(echo "$source_path" | sed -e "s|$SOURCE_BASE|$DESTINATION_BASE|")"
+                    if ! $(path_is_valid "$destination_path") || [[ "$destination_path" != "$source_path" ]]; then
+                        destination_path="$(find_match "$source_path")"
+                    fi
+                    if $(path_is_valid "$destination_path") && [[ "$destination_path" != "$source_path" ]]; then
                         if [ "$(ls -A "$source_path")" ]; then
-                            if [ -z "$source_path" ]; then
-                                source_paths="$source_path"
-                            else
-                                source_paths="$(echo -e "$source_paths\n$source_path")"
-                            fi
+                            source_paths="$(echo -e "$source_paths\n$source_path")"
+                        else
+                            [ $FLAG_DEBUG -ge 1 ] && echo "DEBUG: Empty=$source_path"
                         fi
+                    else
+                        [ $FLAG_DEBUG -ge 1 ] && echo "DEBUG: BadDir=$source_path|$destination_path"
                     fi
                 fi
             fi
@@ -238,12 +286,18 @@ parse_arguments $@
 
 echo "Start Time: $(date)"
 
-escaped_destination=$(echo "$destination" | sed 's/\//\\\//g')
+escaped_destination=$(echo "$DESTINATION_BASE" | sed 's/\//\\\//g')
+[ $FLAG_DEBUG -ge 1 ] && echo "Source Base:      $SOURCE_BASE"
+[ $FLAG_DEBUG -ge 1 ] && echo "Destination Base: $DESTINATION_BASE"
 
-containers=$(docker container ls | grep --only-matching -e ' [a-z0-9\_\-]*$')
+if [ -z "$CONTAINER" ]; then
+    containers=$(docker container ls | grep --only-matching -e ' [a-z0-9\_\-]*$')
 
-for container in $containers; do
-    process_container "$container"
-done
+    for container in $containers; do
+        process_container "$container"
+    done
+else
+    process_container "$CONTAINER"
+fi
 
 echo "Complete. Time Elapsed: $(secs_to_human "$(($(date +%s) - ${START_SEC}))")"
